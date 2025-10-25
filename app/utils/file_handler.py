@@ -23,10 +23,7 @@ FINAL_PATH = DATA_DIR / "transactions.csv"
 MAX_BYTES = int(os.getenv("MAX_CSV_BYTES", str(200 * 1024 * 1024)))
 
 def _read_upload_into_memory(upload: UploadFile) -> bytes:
-    """
-    Stream the upload into memory up to MAX_BYTES.
-    We do not persist raw bytes to disk.
-    """
+    # Stream the upload into memory up to MAX_BYTES
     total = 0
     chunks: list[bytes] = []
     while True:
@@ -40,10 +37,7 @@ def _read_upload_into_memory(upload: UploadFile) -> bytes:
     return b"".join(chunks)
 
 def _atomic_write_csv(df: pd.DataFrame, final_path: Path) -> None:
-    """
-    Write to a temp file in the same directory, then replace in a single operation.
-    This ensures readers see either the old file or the new file, never a half file.
-    """
+    # Create a teamp file and then replace with original file
     final_path.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile(
         mode="w",
@@ -57,10 +51,8 @@ def _atomic_write_csv(df: pd.DataFrame, final_path: Path) -> None:
     _os.replace(tmp_path, final_path)  # atomic on the same filesystem
 
 def save_upload_to_disk(upload: UploadFile) -> Path:
-    """
-    Validate in memory, build a clean normalised CSV, then persist atomically.
-    Strict policy: any failure raises and nothing is written.
-    """
+    # Validate teh file and create a clean standardised CSV and then store it
+    
     # Cheap fail on extension
     if not upload.filename or not upload.filename.lower().endswith(".csv"):
         raise_error(ErrorType.INVALID_FILE_TYPE)

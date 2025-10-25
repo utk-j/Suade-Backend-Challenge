@@ -15,10 +15,7 @@ def _lower_map(cols: list[str]) -> Dict[str, str]:
     return {c.lower(): c for c in cols}
 
 def resolve_required_columns_from_df(df: pd.DataFrame) -> Dict[str, str]:
-    """
-    Return a mapping from standard column name -> actual column name present in df.
-    Raise if any standard column is missing.
-    """
+    # Map standard column names to actual columns given
     lower_cols = _lower_map(list(df.columns))
     resolved: Dict[str, str] = {}
     for target, variants in REQUIRED_COLUMNS.items():
@@ -37,23 +34,15 @@ def ensure_not_empty_df(df: pd.DataFrame) -> None:
         raise_error(ErrorType.EMPTY_CSV, detail="CSV has headers but zero rows")
 
 def drop_rows_with_empty_requireds(df: pd.DataFrame, col_map: Dict[str, str]) -> pd.DataFrame:
-    """Drop rows that are empty across any required field after trimming."""
+    # Drop rows that are empty across any required field after trimming
     req_actual = [col_map[k] for k in ["transaction_id", "user_id", "product_id", "timestamp", "transaction_amount"]]
     trimmed = df[req_actual].map(lambda v: str(v).strip())
     mask_all_present = (trimmed != "").all(axis=1)
     return df.loc[mask_all_present].copy()
 
 def normalise_dataframe(df: pd.DataFrame, col_map: Dict[str, str]) -> pd.DataFrame:
-    """
-    Build a clean dataframe with standard columns and coerced types.
-    Steps:
-      - Rename to standard column headers
-      - IDs kept as trimmed strings
-      - transaction_amount coerced to numeric
-      - timestamp parsed to UTC then serialised as ISO 8601 Z
-      - Drop any row with invalid amount or timestamp
-      - Return only the five standard columns in fixed order
-    """
+    # Create a cleaned dataframe with standardised columns and types
+
     # 1) Rename incoming to standard column names
     df = df.rename(columns={
         col_map["transaction_id"]: "transaction_id",
