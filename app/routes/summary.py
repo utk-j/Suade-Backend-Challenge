@@ -1,83 +1,90 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Query
 from fastapi.responses import JSONResponse
 from app.utils import state
 from app.utils.response_models import ApiResponse
+from app.utils.error_utils import raise_error, ErrorType
+from typing import Optional
 import pandas as pd
 
 router = APIRouter()
 
 @router.get("/summary/{user_id}")
-def summary_for_user(user_id: str):
-    # Check if dataset is there
-    if state.DATA_CSV_PATH is None or not state.DATA_CSV_PATH.exists():
-        err = ApiResponse(
-            status="error",
-            code=400,
-            message="No dataset available. Please upload a CSV first using POST /upload.",
-            data=None,
-        ).model_dump()
-        raise HTTPException(status_code=400, detail=err)
+def summary_for_user(
+    user_id: str,
+    from_date: Optional[str] = Query(None, description="Filter transactions from this date (YYYY-MM-DD)", alias="from"),
+    to_date: Optional[str] = Query(None, description="Filter transactions up to this date (YYYY-MM-DD)", alias="to"),
+):
+    # Ensure dataset is available
+    if state.DATASET_PATH is None or not state.DATASET_PATH.exists():
+        raise_error(
+            ErrorType.UNREADABLE_CSV,
+            detail="No dataset available. Please upload a file using POST /upload first."
+        )
 
-    # 2) Read the CSV 
+    # Read Parquet dataset
     try:
-        df = pd.read_csv(state.DATA_CSV_PATH)
+        df = pd.read_parquet(state.DATASET_PATH)
     except Exception as e:
-        err = ApiResponse(
-            status="error",
-            code=500,
-            message=f"Failed to read dataset: {e}",
-            data=None,
-        ).model_dump()
-        raise HTTPException(status_code=500, detail=err)
+        raise_error(ErrorType.UNREADABLE_CSV, detail=f"Failed to read dataset: {e}")
 
-    # 3) Map required columns case-insensitively (assume upload was validated)
+    # Validate required columns
     required = {"transaction_id", "user_id", "product_id", "timestamp", "transaction_amount"}
     lower_map = {c.lower(): c for c in df.columns}
     missing = [c for c in required if c not in lower_map]
     if missing:
-        err = ApiResponse(
-            status="error",
-            code=400,
-            message=f"Missing required columns: {missing}",
-            data=None,
-        ).model_dump()
-        raise HTTPException(status_code=400, detail=err)
+        raise_error(ErrorType.MISSING_COLUMNS, detail=f"Missing required columns: {missing}")
 
     uid_col = lower_map["user_id"]
     amt_col = lower_map["transaction_amount"]
+    ts_col = lower_map["timestamp"]
 
-    # 4) Filter to this user (treat IDs as strings)
-    user_mask = df[uid_col].astype(str) == str(user_id)
-    user_df = df.loc[user_mask, [amt_col]]
+    # Filter by user_id
+    df = df[df[uid_col].astype(str) == str(user_id)]
 
-    # If no rows for this user: return zeroed stats
-    if user_df.empty:
-        resp = ApiResponse(
-            status="success",
-            code=200,
-            message="Summary computed successfully",
-            data={"user_id": user_id, "count": 0, "min": None, "max": None, "mean": None},
+    # Apply optional date filters
+    if from_date:
+        try:
+            from_dt = pd.to_datetime(from_date)
+            df = df[df[ts_col] >= from_dt]
+        except Exception:
+            raise_error(ErrorType.INVALID_TIMESTAMP, detail=f"Invalid 'from_date' format: {from_date}")
+
+    if to_date:
+        try:
+            to_dt = pd.to_datetime(to_date)
+            df = df[df[ts_col] <= to_dt]
+        except Exception:
+            raise_error(ErrorType.INVALID_TIMESTAMP, detail=f"Invalid 'to_date' format: {to_date}")
+
+    # Handle no matching records
+    if df.empty:
+        raise_error(
+            ErrorType.USER_NOT_FOUND,
+            detail=f"No records found for user_id {user_id} in the given date range."
         )
-        return JSONResponse(content=resp.model_dump(), status_code=200)
 
-    # 5) Amounts -> numeric, drop NaN, compute stats
-    amounts = pd.to_numeric(user_df[amt_col], errors="coerce").dropna()
-    count = int(amounts.size)
-    if count == 0:
-        result = {"user_id": user_id, "count": 0, "min": None, "max": None, "mean": None}
-    else:
-        result = {
-            "user_id": user_id,
-            "count": count,
-            "min": float(amounts.min()),
-            "max": float(amounts.max()),
-            "mean": float(amounts.mean()),
-        }
+    # Compute statistics
+    df[amt_col] = pd.to_numeric(df[amt_col], errors="coerce")
+    df[ts_col] = pd.to_datetime(df[ts_col], errors="coerce")
 
-    resp = ApiResponse(
+    amounts = df[amt_col].dropna()
+    timestamps = df[ts_col].dropna()
+
+    result = {
+        "user_id": user_id,
+        "count": int(amounts.size),
+        "min": float(amounts.min()) if not amounts.empty else None,
+        "max": float(amounts.max()) if not amounts.empty else None,
+        "mean": float(amounts.mean()) if not amounts.empty else None,
+        "total": float(amounts.sum()) if not amounts.empty else None,
+        "first_transaction": timestamps.min().isoformat() if not timestamps.empty else None,
+        "last_transaction": timestamps.max().isoformat() if not timestamps.empty else None,
+    }
+
+    response = ApiResponse(
         status="success",
         code=200,
         message="Summary computed successfully",
         data=result,
     )
-    return JSONResponse(content=resp.model_dump(), status_code=200)
+    return JSONResponse(content=response.model_dump(), status_code=200)

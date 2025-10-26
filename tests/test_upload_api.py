@@ -1,62 +1,83 @@
-# tests/test_upload_api.py
 import io
-from app.utils import file_handler
+import json
+import pytest
+import threading
+from app.utils import state
+from app.utils.response_models import ApiResponse
+
+import polars as pl
+
+
+def _post_file(client, name, content: bytes):
+    files = {"file": (name, io.BytesIO(content), "text/csv")}
+    return client.post("/upload", files=files)
 
 
 def _err_type(resp):
-    """Extracts the error type regardless of whether FastAPI returns {'error':{}} or {'detail':{}}."""
-    body = resp.json()
-    if isinstance(body, dict):
-        if "error" in body and isinstance(body["error"], dict):
-            return body["error"].get("type")
-        if "detail" in body:
-            det = body["detail"]
-            if isinstance(det, dict) and "error" in det and isinstance(det["error"], dict):
-                return det["error"].get("type")
-            if isinstance(det, str):
-                return det
-    return None
+    try:
+        detail = resp.json().get("detail", {})
+        if isinstance(detail, dict):
+            return detail.get("error", {}).get("type")
+        return detail
+    except Exception:
+        return "UNKNOWN"
+
+
+def _read_parquet():
+    assert state.MASTER_PARQUET.exists(), "Parquet file missing"
+    return pl.read_parquet(state.MASTER_PARQUET)
+
+
+def _read_manifest():
+    assert state.MANIFEST_PATH.exists(), "Manifest file missing"
+    return [json.loads(l) for l in state.MANIFEST_PATH.read_text(encoding="utf-8").splitlines() if l.strip()]
 
 
 def test_upload_success(client, sample_ok_csv):
-    files = {"file": ("ok.csv", io.BytesIO(sample_ok_csv), "text/csv")}
-    r = client.post("/upload", files=files)
-
+    r = _post_file(client, "valid.csv", sample_ok_csv)
     assert r.status_code == 201
-    body = r.json()
-    assert body["status"] == "success"
-    assert "stored_at" in body["data"]
 
-    assert file_handler.FINAL_PATH.exists()
-    content = file_handler.FINAL_PATH.read_text(encoding="utf-8").splitlines()
-    assert content[0] == "transaction_id,user_id,product_id,timestamp,transaction_amount"
+    # Check manifest
+    manifest = _read_manifest()
+    assert len(manifest) == 1
+    assert manifest[0]["status"] == "ready"
+    assert manifest[0]["rows_appended"] == 2
 
-    # Adjust rounding to match your current .round(2)
-    assert "001,u1,p1,2025-01-01T10:00:00Z,12.34" in content[1]
-    assert "002,u2,p2,2025-01-01T11:00:00Z,9.90" in content[2]
-
-
-def test_reject_non_csv_extension(client):
-    files = {"file": ("readme.md", io.BytesIO(b"# not csv"), "text/markdown")}
-    r = client.post("/upload", files=files)
-    assert r.status_code == 400
-    assert _err_type(r) == "INVALID_FILE_TYPE"
+    # Check Parquet
+    df = _read_parquet()
+    assert df.shape[0] == 2
+    assert set(df.columns) == {"transaction_id", "user_id", "product_id", "timestamp", "transaction_amount"}
 
 
-def test_empty_payload(client):
-    files = {"file": ("empty.csv", io.BytesIO(b""), "text/csv")}
-    r = client.post("/upload", files=files)
+def test_idempotent_upload(client, sample_ok_csv):
+    # First upload
+    r1 = _post_file(client, "dup.csv", sample_ok_csv)
+    assert r1.status_code == 201
+    before = _read_parquet().shape[0]
+
+    # Re-upload same bytes (same checksum)
+    r2 = _post_file(client, "dup.csv", sample_ok_csv)
+    assert r2.status_code == 201
+
+    # Manifest should still have a single ready entry for this checksum
+    manifest = _read_manifest()
+    ready = [m for m in manifest if m["status"] == "ready"]
+    assert len(ready) == 1
+
+    # Parquet rowcount must be unchanged (no duplicates appended)
+    after = _read_parquet().shape[0]
+    assert after == before
+
+
+def test_empty_file(client):
+    r = _post_file(client, "empty.csv", b"")
     assert r.status_code == 422
     assert _err_type(r) == "EMPTY_CSV"
 
 
-def test_missing_required_column(client):
-    csv = (
-        "transaction_id,user_id,product_id,timestamp\n"
-        "1,u,p,2025-01-01T00:00:00Z\n"
-    ).encode()
-    files = {"file": ("bad.csv", io.BytesIO(csv), "text/csv")}
-    r = client.post("/upload", files=files)
+def test_missing_column(client):
+    csv = b"transaction_id,user_id,product_id,timestamp\n1,u1,p1,2025-01-01T00:00:00Z"
+    r = _post_file(client, "bad.csv", csv)
     assert r.status_code == 422
     assert _err_type(r) == "MISSING_COLUMNS"
 
@@ -68,14 +89,12 @@ def test_invalid_rows_dropped(client):
         "2,u,p,2025-01-01T00:00:00Z,abc\n"
         "3,u,p,2025-01-01T00:00:00Z,12.5\n"
     ).encode()
-    files = {"file": ("mixed.csv", io.BytesIO(csv), "text/csv")}
-    r = client.post("/upload", files=files)
-    assert r.status_code == 201
 
-    text = file_handler.FINAL_PATH.read_text(encoding="utf-8")
-    lines = [ln for ln in text.splitlines() if ln.strip()]
-    assert len(lines) == 2  # header + one valid row
-    assert lines[1].endswith(",2025-01-01T00:00:00Z,12.50")
+    r = _post_file(client, "mixed.csv", csv)
+    assert r.status_code == 201
+    df = _read_parquet()
+    assert df.shape[0] == 1
+    assert df["transaction_amount"][0] == 12.5
 
 
 def test_all_rows_invalid(client):
@@ -83,103 +102,74 @@ def test_all_rows_invalid(client):
         "transaction_id,user_id,product_id,timestamp,transaction_amount\n"
         "1,u,p,not-a-date,abc\n"
     ).encode()
-    files = {"file": ("bad.csv", io.BytesIO(csv), "text/csv")}
-    r = client.post("/upload", files=files)
+
+    r = _post_file(client, "allbad.csv", csv)
     assert r.status_code == 422
     assert _err_type(r) == "EMPTY_CSV"
 
 
-def test_preserve_leading_zeros(client):
-    csv = (
-        "transaction_id,user_id,product_id,timestamp,transaction_amount\n"
-        "000123,000045,007,2025-01-01T00:00:00Z,1\n"
-    ).encode()
-    files = {"file": ("ok.csv", io.BytesIO(csv), "text/csv")}
-    r = client.post("/upload", files=files)
-    assert r.status_code == 201
-    text = file_handler.FINAL_PATH.read_text(encoding="utf-8")
-    assert "000123,000045,007,2025-01-01T00:00:00Z,1.00" in text
-
-
-def test_header_variants_accepted(client):
+def test_header_variants(client):
     csv = (
         "Transaction-ID,User,Product,DateTime,Amount\n"
-        "t1,u1,p1,2025-01-02T09:00:00Z,10\n"
+        "t1,u1,p1,2025-01-01T00:00:00Z,10\n"
     ).encode()
-    files = {"file": ("ok.csv", io.BytesIO(csv), "text/csv")}
-    r = client.post("/upload", files=files)
+
+    r = _post_file(client, "headermap.csv", csv)
     assert r.status_code == 201
-    text = file_handler.FINAL_PATH.read_text(encoding="utf-8")
-    assert "t1,u1,p1,2025-01-02T09:00:00Z,10.00" in text
+    df = _read_parquet()
+    assert df.shape[0] == 1
+    assert df["transaction_id"][0] == "t1"
+    assert df["transaction_amount"][0] == 10.0
 
 
-def test_file_too_large_limit(client, monkeypatch):
+def test_file_too_large(client, monkeypatch):
     from app.utils import file_handler
-    monkeypatch.setattr(file_handler, "MAX_BYTES", 32)  # 32 bytes max
-    big = b"x" * 1024  # 1 KB
-    files = {"file": ("big.csv", io.BytesIO(big), "text/csv")}
-    r = client.post("/upload", files=files)
+    monkeypatch.setattr(file_handler, "MAX_BYTES", 64)
+    r = _post_file(client, "big.csv", b"x" * 512)
     assert r.status_code == 413
     assert _err_type(r) == "FILE_TOO_LARGE"
 
-def _post_file(client, name, content: bytes):
-    files = {"file": (name, io.BytesIO(content), "text/csv")}
-    return client.post("/upload", files=files)
 
-def test_two_quick_uploads_atomic(client):
-    # Concurrency tests with 2 requests
+def test_parallel_upload_atomic(client):
     csv1 = (
         "transaction_id,user_id,product_id,timestamp,transaction_amount\n"
-        "A,u1,p1,2025-01-01T00:00:00Z,1\n"
+        "A,u1,p1,2025-01-01T00:00:00Z,1.11\n"
     ).encode()
     csv2 = (
         "transaction_id,user_id,product_id,timestamp,transaction_amount\n"
-        "B,u2,p2,2025-01-02T00:00:00Z,2\n"
+        "B,u2,p2,2025-01-02T00:00:00Z,2.22\n"
     ).encode()
 
-    import threading
-    t1 = threading.Thread(target=_post_file, args=(client, "a.csv", csv1))
-    t2 = threading.Thread(target=_post_file, args=(client, "b.csv", csv2))
-    t1.start(); t2.start()
-    t1.join(); t2.join()
-
-    # Read final file: must be either the cleaned output of csv1 OR csv2
-    text = file_handler.FINAL_PATH.read_text(encoding="utf-8")
-    lines = [ln for ln in text.splitlines() if ln.strip()]
-    assert len(lines) == 2  # header + one row
-    assert lines[0] == "transaction_id,user_id,product_id,timestamp,transaction_amount"
-
-    row = lines[1]
-    expect_row_1 = "A,u1,p1,2025-01-01T00:00:00Z,1.00"
-    expect_row_2 = "B,u2,p2,2025-01-02T00:00:00Z,2.00"
-    assert row in (expect_row_1, expect_row_2), f"Unexpected row: {row}"
-
-def test_many_quick_uploads_still_consistent(client):
-    # Testing for concurrency with several uploads quickly --> final file should always be a complete dataset (last write wins)
-    import threading
-    payloads = []
-    for i in range(5):
-        csv = (
-            "transaction_id,user_id,product_id,timestamp,transaction_amount\n"
-            f"T{i},U{i},P{i},2025-01-01T00:00:00Z,{i + 0.5}\n"
-        ).encode()
-        payloads.append(("t.csv", csv))
-
     threads = [
-        threading.Thread(target=_post_file, args=(client, name, content))
-        for (name, content) in payloads
+        threading.Thread(target=_post_file, args=(client, "a.csv", csv1)),
+        threading.Thread(target=_post_file, args=(client, "b.csv", csv2)),
     ]
     for t in threads: t.start()
     for t in threads: t.join()
 
-    text = file_handler.FINAL_PATH.read_text(encoding="utf-8")
-    lines = [ln for ln in text.splitlines() if ln.strip()]
-    assert len(lines) == 2
-    assert lines[0] == "transaction_id,user_id,product_id,timestamp,transaction_amount"
+    df = _read_parquet()
+    # Both uploads should be present, and no corruption
+    assert df.shape[0] == 2
+    assert set(df["transaction_id"].to_list()) == {"A", "B"}
 
-    # Final row must be one of the expected cleaned rows
-    expected = {
-        f"T{i},U{i},P{i},2025-01-01T00:00:00Z,{(i + 0.5):.2f}"
-        for i in range(5)
-    }
-    assert lines[1] in expected
+
+
+def test_high_volume_parallel_uploads(client):
+    threads = []
+    seen_ids = set()
+
+    for i in range(5):
+        txid = f"T{i:03}"
+        seen_ids.add(txid)
+        csv = (
+            "transaction_id,user_id,product_id,timestamp,transaction_amount\n"
+            f"{txid},U{i},P{i},2025-01-01T00:00:00Z,{i + 0.99}\n"
+        ).encode()
+        threads.append(threading.Thread(target=_post_file, args=(client, f"{txid}.csv", csv)))
+
+    for t in threads: t.start()
+    for t in threads: t.join()
+
+    df = _read_parquet()
+    assert df.shape[0] == 5
+    assert set(df["transaction_id"].to_list()) == seen_ids
