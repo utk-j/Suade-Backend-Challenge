@@ -52,3 +52,20 @@ def append_ingest(*, status: str, checksum: str, rows: int | None, error: str | 
     with MANIFEST_PATH.open("a", encoding="utf-8") as f:
         f.write(json.dumps(rec, ensure_ascii=False) + "\n")
     return ingest_id
+
+def try_restore_dataset_path() -> None:
+    # Set DATASET_PATH to the master Parquet file if the latest manifest entry is ready
+    global DATASET_PATH
+
+    if not MANIFEST_PATH.exists() or not MASTER_PARQUET.exists():
+        return
+
+    # Find the latest record with status == "ready"
+    latest_ready = None
+    for rec in _iter_manifest():
+        if rec.get("status") == "ready":
+            latest_ready = rec
+
+    if latest_ready:
+        DATASET_PATH = MASTER_PARQUET
+
