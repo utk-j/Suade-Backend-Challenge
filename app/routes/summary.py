@@ -11,8 +11,8 @@ router = APIRouter()
 @router.get("/summary/{user_id}")
 def summary_for_user(
     user_id: str,
-    from_date: Optional[str] = Query(None, description="Filter transactions from this date (YYYY-MM-DD)"),
-    to_date: Optional[str] = Query(None, description="Filter transactions up to this date (YYYY-MM-DD)"),
+    from_date: Optional[str] = Query(None, description="Filter transactions from this date (YYYY-MM-DD)", alias="from"),
+    to_date: Optional[str] = Query(None, description="Filter transactions up to this date (YYYY-MM-DD)", alias="to"),
 ):
     # Ensure dataset is available
     if state.DATASET_PATH is None or not state.DATASET_PATH.exists():

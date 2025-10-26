@@ -9,11 +9,13 @@ DATASET_PATH: Optional[Path] = None
 DATA_DIR = Path("data")
 MASTER_PARQUET = DATA_DIR / "transactions.parquet"
 MANIFEST_PATH = DATA_DIR / "manifest.jsonl"
-LOCK_PATH = DATA_DIR / "upload.lock"
+LOCK_PATH = DATA_DIR / "upload.lock"             
+LOCKS_DIR = DATA_DIR / "locks"   
 
 def ensure_data_layout() -> None:
     # Make sure the data directories and manifest file exist
     DATA_DIR.mkdir(parents=True, exist_ok=True)
+    LOCKS_DIR.mkdir(parents=True, exist_ok=True)
     MANIFEST_PATH.touch(exist_ok=True)
 
 # ---- manifest helpers ----
