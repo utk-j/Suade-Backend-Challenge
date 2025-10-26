@@ -9,3 +9,11 @@ __pycache__/
 # Data
 data/
 dummy_transactions.csv
+*.parquet
+*.jsonl
+
+# Temp and logs
+*.log
+tmp/
+temp/
+*.tmp

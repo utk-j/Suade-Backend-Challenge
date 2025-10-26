@@ -8,28 +8,17 @@ router = APIRouter()
 
 @router.post("/upload")
 async def upload_csv(file: UploadFile = File(...)):
-    path = save_upload_to_disk(file)
-    state.DATA_CSV_PATH = path
-
-    # Try to read optional meta counts if present
-    rows_cleaned = None
-    rows_dropped = None
-    try:
-        import json
-        meta = json.loads((path.with_suffix(".meta.json")).read_text(encoding="utf-8"))
-        rows_cleaned = meta.get("rows_cleaned")
-        rows_dropped = meta.get("rows_dropped")
-    except Exception:
-        pass
+    # Validate, normalise, and append uploaded CSV data into master Parquet storage.
+    
+    out_path = save_upload_to_disk(file)
+    state.DATASET_PATH = out_path  
 
     response = ApiResponse(
         status="success",
         code=201,
-        message="File uploaded, validated, and normalised",
+        message="Upload validated and appended to master dataset",
         data={
-            "stored_at": str(path.resolve()),
-            "rows_cleaned": rows_cleaned,
-            "rows_dropped": rows_dropped,
+            "stored_at": str(out_path.resolve()),
         },
     )
     return JSONResponse(content=response.model_dump(), status_code=201)
