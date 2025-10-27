@@ -129,6 +129,10 @@ The file is fully validated in memory before being stored as a clean Parquet dat
 - Invalid rows are dropped during validation  
 - Successfully uploaded files are logged in the manifest (`data/manifest.jsonl`)
 
+**Upload Flow Fiagram**
+Below is a visual summary of the `/upload` pipeline, showing how the backend validates, deduplicates, and safely stores incoming files.
+<img width="1496" height="4112" alt="Upload Diagram" src="https://github.com/user-attachments/assets/c260bd21-5c51-481f-afcc-61df131a93b5" />
+
 ---
 
 ### 3. `/summary/{user_id}`
@@ -141,6 +145,11 @@ You can optionally add date filters (`from` and `to`) to narrow down the range.
 - Enter a user ID (e.g. `200`)
 - Optionally provide `from` and `to` date filters
 - Click **Execute** to view the computed summary
+
+  ** Summary Flow Diagram**
+  The diagram below illustrates how the /summary/{user_id} endpoint processes requests — from parameter validation and dataset filtering to computing user-level transaction statistics.
+  <img width="1466" height="3963" alt="Summary Diagram" src="https://github.com/user-attachments/assets/d8d0b436-9b01-4afe-bd02-f1e0571e3acb" />
+
 
 ---
 
