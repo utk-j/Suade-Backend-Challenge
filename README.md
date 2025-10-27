@@ -2,8 +2,8 @@
 
 This project implements a FastAPI backend for the Suade Graduate Engineer Challenge.  
 It provides two main endpoints:  
-- **`/upload`** – for validating, normalising, and storing transaction data  
-- **`/summary/{user_id}`** – for computing per-user transaction statistics
+- **`/upload`** - for validating, normalising, and storing transaction data  
+- **`/summary/{user_id}`** - for computing per-user transaction statistics
 
 The implementation focuses on production-grade design: atomic writes, data integrity, and deterministic testing.
 
@@ -110,7 +110,7 @@ Open your browser and visit:
 ```bash
 http://127.0.0.1:8001/docs
 ```
-From there, you can upload CSV files and query user summaries directly — no code required.
+From there, you can upload CSV files and query user summaries directly - no code required.
 
 ---
 
@@ -146,9 +146,9 @@ You can optionally add date filters (`from` and `to`) to narrow down the range.
 - Optionally provide `from` and `to` date filters
 - Click **Execute** to view the computed summary
 
-  ** Summary Flow Diagram**
-  The diagram below illustrates how the /summary/{user_id} endpoint processes requests — from parameter validation and dataset filtering to computing user-level transaction statistics.
-  <img width="1466" height="3963" alt="Summary Diagram" src="https://github.com/user-attachments/assets/d8d0b436-9b01-4afe-bd02-f1e0571e3acb" />
+**Summary Flow Diagram**
+The diagram below illustrates how the /summary/{user_id} endpoint processes requests - from parameter validation and dataset filtering to computing user-level transaction statistics.
+<img width="1466" height="3963" alt="Summary Diagram" src="https://github.com/user-attachments/assets/d8d0b436-9b01-4afe-bd02-f1e0571e3acb" />
 
 
 ---
@@ -164,7 +164,7 @@ Returns a simple confirmation message when the backend is live.
 ## Running Tests
 
 This project includes a **comprehensive pytest suite** that fully validates functionality, performance, and data integrity.  
-All tests are isolated — they use temporary directories to avoid touching real data.
+All tests are isolated - they use temporary directories to avoid touching real data.
 
 To run all tests:
 
@@ -176,11 +176,11 @@ pytest tests/ -v
 
 ### What’s Covered
 
-- **Unit tests** – verify validators, schema handling, and normalisation logic  
-- **Integration tests** – confirm `/upload` and `/summary` endpoints work end-to-end  
-- **Concurrency tests** – ensure thread safety and idempotency across parallel uploads  
-- **Smoke tests** – simulate large file uploads and high-volume ingestion  
-- **Seeded dataset tests** – check real summary computations using `summary_test_dataset.csv`
+- **Unit tests** - verify validators, schema handling, and normalisation logic  
+- **Integration tests** - confirm `/upload` and `/summary` endpoints work end-to-end  
+- **Concurrency tests** - ensure thread safety and idempotency across parallel uploads  
+- **Smoke tests** - simulate large file uploads and high-volume ingestion  
+- **Seeded dataset tests** - check real summary computations using `summary_test_dataset.csv`
 
 In total, there are **19 automated tests** that run in under 5 seconds on a local machine.
 
@@ -259,6 +259,14 @@ While the current implementation is fully functional and production-ready for a 
 - If deployed publicly, a **reverse proxy** (e.g., Nginx) and **rate limiting** would help prevent abuse.
 - Eventually, the API could be **containerised and hosted on a cloud platform** (AWS, Azure, or GCP) for global accessibility.
 
+### 6. Data Integrity & File Validation
+
+- **End-to-end checksum validation** can be added to guarantee file completeness and detect corruption.  
+- Compute and store both `upload_sha256` (raw bytes) and `persisted_sha256` (final Parquet).  
+- Compare hashes before marking an upload as complete, ensuring no partial writes or truncation.  
+- Extend tests to simulate truncated uploads and corrupted files.
+- This would make the ingestion process fully verifiable from client upload to persisted dataset, complementing the current atomic write safety.
+
 ---
 
-These improvements would move the project from a robust local prototype to a cloud-ready, scalable backend service — capable of handling higher concurrency, larger datasets, and enterprise-grade security.
+These improvements would take the project from a solid local prototype to a scalable, cloud-ready backend that can handle larger datasets, more users, and stronger security.
